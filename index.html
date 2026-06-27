@@ -810,12 +810,17 @@
     <div class="scroll" id="prod-list" style="flex:1;overflow-y:auto;padding-bottom:16px">
 
     <!-- EDITING BANNER — shown when editing an already-added item -->
-    <div id="editing-banner" style="display:none;align-items:center;justify-content:space-between;
-      gap:10px;padding:9px 12px;margin-bottom:10px;background:rgba(251,191,36,.1);
+    <div id="editing-banner" style="display:none;flex-direction:column;gap:6px;
+      padding:10px 12px;margin-bottom:10px;background:rgba(251,191,36,.08);
       border:1px solid rgba(251,191,36,.3);border-radius:10px">
-      <span style="font-size:.75rem;color:#fbbf24">✏️ Editando producto</span>
-      <span onclick="cancelEditItem()" style="font-size:.72rem;color:var(--muted);
-        cursor:pointer;touch-action:manipulation;text-decoration:underline">Cancelar</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <span style="font-size:.75rem;color:#fbbf24;font-weight:600">✏️ Editando producto</span>
+        <span onclick="cancelEditItem()" style="font-size:.72rem;color:var(--muted);
+          cursor:pointer;touch-action:manipulation;text-decoration:underline;flex-shrink:0">Cancelar</span>
+      </div>
+      <!-- Gemini suggestion — shown only when editing from the clarity review -->
+      <div id="editing-hint" style="display:none;font-size:.76rem;color:#fbbf24;
+        line-height:1.5;border-top:1px solid rgba(251,191,36,.25);padding-top:6px"></div>
     </div>
 
     <!-- SELECTED PRODUCT CARD (shown when catalog product picked) -->
@@ -995,7 +1000,32 @@
 </div>
 
 <!-- ══════════════════════════════════
-     CLARITY REVIEW — flagged before saving
+     CATALOG MATCH — step 1 before clarity check
+     Shows similar products from master table for each
+     loaded item; user picks the right one or says "None"
+══════════════════════════════════ -->
+<div class="ov" id="ov-catalog-match" style="align-items:stretch;padding-bottom:0;">
+  <div class="sheet" style="max-height:100dvh;height:100dvh;border-radius:0;display:flex;flex-direction:column;">
+    <div class="shdr">
+      <div>
+        <div class="stitle">🔗 Productos similares encontrados</div>
+        <div class="ssub">Seleccioná si alguno es el mismo que cargaste</div>
+      </div>
+    </div>
+    <div style="padding:8px 16px 4px;flex-shrink:0;font-size:.74rem;color:var(--muted);line-height:1.5">
+      Encontramos productos similares en el catálogo. Vincularlo ayuda a comparar precios entre comercios.
+    </div>
+    <div id="catalog-match-list" style="flex:1;overflow-y:auto;padding:0 16px 8px"></div>
+    <div style="flex-shrink:0;padding:10px 16px;padding-bottom:env(safe-area-inset-bottom,14px);
+      background:var(--surface);border-top:1px solid var(--b2);display:flex;gap:8px">
+      <button class="bcancel" onclick="skipCatalogMatch()">Saltear todo</button>
+      <button class="bsave" id="catalog-match-confirm-btn" onclick="applyCatalogMatches()">Continuar →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     CLARITY REVIEW — step 2
      (ambiguous product names missing size/container type)
 ══════════════════════════════════ -->
 <div class="ov" id="ov-clarity" style="align-items:stretch;padding-bottom:0;">
@@ -2073,6 +2103,9 @@ function resetProductForm() {
   brandMode = 'suelto';
   editingItemIndex = null;
   document.getElementById('editing-banner').style.display = 'none';
+  const hintEl = document.getElementById('editing-hint');
+  hintEl.style.display = 'none';
+  hintEl.textContent = '';
   document.getElementById('add-item-btn').textContent = '＋ Agregar';
   document.getElementById('prod-search').value = '';
   document.getElementById('ac-list').classList.remove('open');
@@ -2436,15 +2469,14 @@ function addItemToList() {
 }
 
 // ── EDIT an already-added item ────────────────────
-function editChipItem(idx) {
+// hint (optional) — Gemini question text shown inside the banner when
+// editing is triggered from the clarity review screen
+function editChipItem(idx, hint = '') {
   const item = currentItems[idx];
   if (!item) return;
 
   editingItemIndex = idx;
 
-  // Always edit name/price/qty/notes as free-form text — but keep the
-  // original category's labels (e.g. "Precio por Kilo" for verdulería/
-  // carnicería items) so the units shown still make sense.
   currentProductSel = null;
   document.getElementById('sel-card').classList.remove('show');
   document.getElementById('manual-name-wrap').style.display = 'block';
@@ -2452,8 +2484,6 @@ function editChipItem(idx) {
   document.getElementById('ac-list').classList.remove('open');
 
   configureForm(item.category || '');
-  // configureForm() may reveal the Suelto/Marca toggle for fresco categories —
-  // suppress it here since the name field is already fully editable as text
   document.getElementById('frescos-section').style.display = 'none';
 
   document.getElementById('inp-name').value  = item.product_name || '';
@@ -2462,12 +2492,21 @@ function editChipItem(idx) {
   document.getElementById('inp-notes').value = item.notes        || '';
   calcTotal();
 
-  document.getElementById('editing-banner').style.display = 'flex';
+  // Show banner — with Gemini question hint if provided
+  const banner = document.getElementById('editing-banner');
+  const hintEl = document.getElementById('editing-hint');
+  if (hint) {
+    hintEl.textContent = '💡 ' + hint;
+    hintEl.style.display = 'block';
+  } else {
+    hintEl.style.display = 'none';
+    hintEl.textContent  = '';
+  }
+  banner.style.display = 'flex';
   document.getElementById('add-item-btn').textContent = '💾 Guardar cambios';
 
-  // Scroll the form into view and focus
   document.getElementById('prod-list').scrollTop = 0;
-  document.getElementById('inp-price').focus();
+  document.getElementById('inp-name').focus();
 }
 
 function cancelEditItem() {
@@ -2830,11 +2869,14 @@ function loadReceiptItems() {
   scannedReceiptItems = [];
 }
 
-// ── CONFIRM PURCHASE (save to session) ────────────
-// Track current trip session ID (one session per app session)
+// ══════════════════════════════════════════
+//  CONFIRM FLOW — two steps before saving:
+//  Step 1: catalog similarity match (Supabase)
+//  Step 2: clarity/detail check (Gemini)
+// ══════════════════════════════════════════
 let currentTripSessionId = null;
+let catalogMatchSelections = {}; // itemIdx → selected catalog product (or null = "None")
 
-// ── CONFIRM: validate clarity first, then save ────
 async function confirmPurchase() {
   if (editingItemIndex !== null) {
     toast('⚠️ Terminá de editar el producto — tocá "Guardar cambios" o "Cancelar" primero');
@@ -2842,30 +2884,185 @@ async function confirmPurchase() {
   }
   if (currentItems.length === 0) { toast('Agregá al menos un producto'); return; }
 
-  // If Gemini is configured, do a critical check that each product name has
-  // enough detail (size, packaging, variant) to be uniquely identifiable —
-  // for any product category, not just beverages. Gemini may use Google
-  // Search to look up real packaging options when it's unsure.
-  // This is best-effort: if it's not configured or the check fails for any
-  // reason, we fail OPEN and just proceed with the save — this validation
-  // should never block the user from saving their purchase.
-  if (geminiApiKey) {
-    const btn = document.getElementById('confirm-prods-btn');
-    const originalHTML = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = '🔍 Verificando detalles…';
+  const btn = document.getElementById('confirm-prods-btn');
+  const originalHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '🔍 Buscando similares…';
 
-    const ambiguous = await checkItemsClarity(currentItems);
+  // ── STEP 1: catalog similarity check ─────────────
+  // Only for items that aren't already linked to the catalog
+  // (catalog-picked items already have a UUID product_id; manual/receipt
+  //  items have IDs starting with "manual_" or "receipt_")
+  const unlinked = currentItems
+    .map((it, i) => ({ it, i }))
+    .filter(({ it }) =>
+      it.product_id?.startsWith('manual_') ||
+      it.product_id?.startsWith('receipt_')
+    );
 
-    btn.disabled = false;
-    btn.innerHTML = originalHTML;
-
-    if (ambiguous.length > 0) {
-      showClarityReview(ambiguous);
-      return; // wait for the user's decision before saving
-    }
+  let itemsWithMatches = [];
+  if (SB && unlinked.length > 0) {
+    itemsWithMatches = await findCatalogSimilarities(unlinked.map(u => u));
   }
 
+  btn.disabled = false;
+  btn.innerHTML = originalHTML;
+
+  if (itemsWithMatches.length > 0) {
+    catalogMatchSelections = {};
+    showCatalogMatchReview(itemsWithMatches);
+    return; // wait for user decisions, then flow continues in applyCatalogMatches()
+  }
+
+  // No catalog matches → go straight to Step 2
+  await runClarityCheck();
+}
+
+// ── Search catalog for similar products ───────────
+async function findCatalogSimilarities(unlinked) {
+  const results = [];
+  // Run all queries in parallel for speed
+  await Promise.all(unlinked.map(async ({ it, i }) => {
+    try {
+      // Extract meaningful search terms — remove numbers, punctuation, short words
+      const terms = it.product_name
+        .toLowerCase()
+        .replace(/[0-9]+(?:[.,][0-9]+)?(?:ml|l|kg|g|cm|un|x)?/gi, '')
+        .replace(/[^a-záéíóúüñ\s]/gi, '')
+        .split(/\s+/)
+        .filter(w => w.length > 2)
+        .slice(0, 3); // use up to 3 meaningful words
+
+      if (!terms.length) return;
+
+      // Build OR filter — match any of the extracted terms in brand or product_type
+      const filter = terms.map(t =>
+        `brand.ilike.%${t}%,product_type.ilike.%${t}%,category.ilike.%${t}%`
+      ).join(',');
+
+      const { data, error } = await SB
+        .from('supermarket_products')
+        .select('id, brand, product_type, category, size, observations')
+        .or(filter)
+        .limit(5);
+
+      if (error || !data?.length) return;
+      results.push({ itemIdx: i, item: it, matches: data });
+    } catch(e) {
+      console.warn('findCatalogSimilarities error for item', i, e);
+    }
+  }));
+  return results;
+}
+
+// ── Show catalog match review screen ──────────────
+function showCatalogMatchReview(itemsWithMatches) {
+  const list = document.getElementById('catalog-match-list');
+
+  list.innerHTML = itemsWithMatches.map(({ itemIdx, item, matches }) => `
+    <div style="padding:14px 0;border-bottom:1px solid var(--b2)" data-item-idx="${itemIdx}">
+      <div style="font-size:.78rem;color:var(--muted);margin-bottom:2px;text-transform:uppercase;
+        letter-spacing:.05em;font-size:.65rem">Cargado como</div>
+      <div style="font-size:.88rem;font-weight:700;color:var(--text);margin-bottom:10px">${item.product_name}</div>
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:8px">¿Es alguno de estos?</div>
+
+      <!-- None option — pre-selected by default -->
+      <label class="catalog-match-option selected" data-item="${itemIdx}" data-cat-id="none"
+        onclick="selectCatalogOption(this, ${itemIdx}, null)"
+        style="display:flex;align-items:flex-start;gap:10px;padding:9px 11px;border-radius:10px;
+        background:var(--s2);border:1px solid var(--cyan);cursor:pointer;touch-action:manipulation;margin-bottom:6px">
+        <div class="cat-radio" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--cyan);
+          flex-shrink:0;margin-top:2px;background:var(--cyan)"></div>
+        <div style="font-size:.78rem;color:var(--muted)">Ninguno de estos — es un producto diferente</div>
+      </label>
+
+      ${matches.map(m => {
+        const label = `${m.brand||''} ${m.product_type||''}`.trim();
+        const meta  = [m.category, m.size, m.observations].filter(Boolean).join(' · ');
+        return `
+          <label class="catalog-match-option" data-item="${itemIdx}" data-cat-id="${m.id}"
+            onclick="selectCatalogOption(this, ${itemIdx}, ${JSON.stringify(m).replace(/"/g,'&quot;')})"
+            style="display:flex;align-items:flex-start;gap:10px;padding:9px 11px;border-radius:10px;
+            background:var(--s2);border:1px solid var(--b2);cursor:pointer;touch-action:manipulation;margin-bottom:6px">
+            <div class="cat-radio" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--b2);
+              flex-shrink:0;margin-top:2px"></div>
+            <div>
+              <div style="font-size:.82rem;font-weight:600;color:var(--text)">${label}</div>
+              ${meta ? `<div style="font-size:.68rem;color:var(--muted);margin-top:2px">${meta}</div>` : ''}
+            </div>
+          </label>`;
+      }).join('')}
+    </div>`).join('');
+
+  // Default: all items have "None" pre-selected
+  itemsWithMatches.forEach(({ itemIdx }) => { catalogMatchSelections[itemIdx] = null; });
+
+  openOv('ov-catalog-match');
+}
+
+function selectCatalogOption(el, itemIdx, catalogProduct) {
+  // Deselect all options for this item
+  document.querySelectorAll(`[data-item="${itemIdx}"]`).forEach(opt => {
+    opt.style.borderColor = 'var(--b2)';
+    opt.classList.remove('selected');
+    opt.querySelector('.cat-radio').style.background = '';
+    opt.querySelector('.cat-radio').style.borderColor = 'var(--b2)';
+  });
+  // Select this one
+  el.style.borderColor = 'var(--cyan)';
+  el.classList.add('selected');
+  const radio = el.querySelector('.cat-radio');
+  radio.style.background = 'var(--cyan)';
+  radio.style.borderColor = 'var(--cyan)';
+  // Store selection
+  catalogMatchSelections[itemIdx] = catalogProduct; // null = None
+}
+
+function skipCatalogMatch() {
+  closeOv('ov-catalog-match');
+  runClarityCheck();
+}
+
+async function applyCatalogMatches() {
+  // Apply any catalog picks to the real items
+  Object.entries(catalogMatchSelections).forEach(([idx, catalogProd]) => {
+    if (!catalogProd) return; // user chose "None"
+    const i = parseInt(idx);
+    if (!currentItems[i]) return;
+    // Enrich the item with catalog product details
+    currentItems[i].product_id          = catalogProd.id;
+    currentItems[i].product_name        =
+      `${catalogProd.brand||''} ${catalogProd.product_type||''}`.trim() || currentItems[i].product_name;
+    currentItems[i].category            = catalogProd.category || currentItems[i].category;
+    currentItems[i].size                = catalogProd.size    || currentItems[i].size;
+    currentItems[i].catalog_product_id  = catalogProd.id;
+  });
+
+  renderChips(); // refresh chips with enriched names
+  closeOv('ov-catalog-match');
+
+  // Now continue to Step 2
+  await runClarityCheck();
+}
+
+// ── STEP 2: clarity/detail check via Gemini ───────
+async function runClarityCheck() {
+  if (!geminiApiKey) { proceedConfirmPurchase(); return; }
+
+  const btn = document.getElementById('confirm-prods-btn');
+  const originalHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '🔍 Verificando detalles…';
+
+  const ambiguous = await checkItemsClarity(currentItems);
+
+  btn.disabled = false;
+  btn.innerHTML = originalHTML;
+
+  if (ambiguous.length > 0) {
+    showClarityReview(ambiguous);
+    return;
+  }
   proceedConfirmPurchase();
 }
 
@@ -2942,7 +3139,7 @@ function showClarityReview(ambiguous) {
       <div style="padding:12px 0;border-bottom:1px solid var(--b2)">
         <div style="font-size:.85rem;font-weight:600;color:var(--text);margin-bottom:4px">${item.product_name}</div>
         <div style="font-size:.78rem;color:#fbbf24;margin-bottom:10px;line-height:1.4">⚠️ ${a.question}</div>
-        <button onclick="editAmbiguousItem(${a.index})"
+        <button onclick="editAmbiguousItem(${a.index}, ${JSON.stringify(a.question).replace(/"/g, '&quot;')})"
           style="padding:8px 14px;border-radius:9px;background:var(--s2);border:1px solid var(--b2);
           color:var(--cyan);font-size:.78rem;cursor:pointer;touch-action:manipulation">✏️ Completar detalle</button>
       </div>`;
@@ -2952,14 +3149,14 @@ function showClarityReview(ambiguous) {
   openOv('ov-clarity');
 }
 
-function editAmbiguousItem(idx) {
+function editAmbiguousItem(idx, question) {
   closeOv('ov-clarity');
-  editChipItem(idx);
+  editChipItem(idx, question || '');
 }
 
 function confirmAnyway() {
   closeOv('ov-clarity');
-  proceedConfirmPurchase();
+  proceedConfirmPurchase(); // user explicitly chose to save without fixing details
 }
 
 // ── Actual save (was the body of confirmPurchase) ─
