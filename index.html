@@ -2748,10 +2748,13 @@ Rules: compute unit_price = line_total / quantity if not explicit. Default quant
       unit_price: Math.max(0, Number(i.unit_price) || 0),
       line_total: Math.max(0, Number(i.line_total) || (Number(i.unit_price)||0) * (Number(i.quantity)||1)),
       notes:      '',
-      _status:    'pending',    // pending | done | skipped
-      _catalog:   null,         // selected catalog product or null
-      _question:  null,         // Gemini clarity question or null
-      _answer:    '',           // user's answer to clarity question
+      _status:        'pending',    // pending | done | skipped
+      _catalog:       null,         // selected catalog product or null
+      _clarityStatus: 'pending',    // pending | asking | complete
+      _missingFields: [],
+      _validationMessage: '',
+      _question:      null,         // Gemini clarity question or null
+      _answer:        '',           // user's answer to clarity question
     })));
 
   } catch(e) {
@@ -2970,13 +2973,23 @@ async function renderWizardStep2() {
   // If a catalog product was picked in Step 1, skip clarity check —
   // catalog products are already fully specified
   if (item._catalog) {
+    item._clarityStatus = 'complete';
+    item._missingFields = [];
+    item._validationMessage = 'Producto identificado del catálogo.';
     el.innerHTML = `<div style="font-size:.75rem;color:var(--green);padding:4px 0 10px">
       ✅ Producto identificado del catálogo — listo para confirmar.</div>`;
     return;
   }
 
-  if (!geminiApiKey) { el.innerHTML = ''; return; }
+  if (!geminiApiKey) {
+    item._clarityStatus = 'pending';
+    item._validationMessage = 'Falta la clave de Gemini para validar.';
+    el.innerHTML = `<div style="font-size:.75rem;color:var(--warn);padding:4px 0 10px">
+      ⚠️ Configurá tu clave de Gemini para validar este producto.</div>`;
+    return;
+  }
 
+  item._clarityStatus = 'asking';
   el.innerHTML = `
     <div style="color:var(--muted);font-size:.78rem;padding:8px 0">
       <div class="spin" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></div>
@@ -2988,32 +3001,46 @@ async function renderWizardStep2() {
     const notes = (document.getElementById('wiz-notes')?.value || item.notes || '').trim();
 
     const prompt = `Sos un revisor de un producto comprado en un supermercado argentino.
-Nombre: "${name}"${notes ? `
-Notas: "${notes}"` : ''}
+Nombre: "${name}"${notes ? `\nNotas: "${notes}"` : ''}
 
-¿El nombre y las notas juntos permiten identificar este producto de forma ÚNICA (marca, envase, tamaño/peso)?
-Si falta información clave que exista en múltiples variantes, podés buscar en Google las presentaciones reales en Argentina.
+Verificá si el producto contiene todos los detalles necesarios para identificarlo de forma única:
+- marca
+- tipo de producto
+- tamaño, volumen o peso
+- envase/formato o variante
 
-Responde SOLO con JSON: {"ok":true} si está bien identificado, o {"ok":false,"question":"pregunta concisa en español"} si falta info.`;
+Responde SOLO con JSON.
+Si está correcto, devuelve:
+{"ok": true}
+Si falta información, devuelve:
+{"ok": false, "missing_fields": ["size","package_format"], "question": "Pregunta concisa en español"}`;
 
     const raw = await callGemini([{ text: prompt }], { tools: [{ google_search: {} }] });
     const clean = raw.replace(/```json|```/g,'').trim();
-    const res = JSON.parse(clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1));
+    const parsed = JSON.parse(clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1));
+    const res = parsed && typeof parsed === 'object' && 'ok' in parsed ? parsed : { ok: false, missing_fields: ['detalles'], question: 'No se pudo validar el producto. Por favor revisá el nombre y las notas.' };
 
     if (wizardIdx !== wizardItems.indexOf(item) && wizardItems[wizardIdx] !== item) return;
 
     if (res.ok) {
+      item._clarityStatus = 'complete';
+      item._missingFields = [];
+      item._validationMessage = 'Detalles suficientes — listo para confirmar.';
       item._question = null;
       el.innerHTML = `<div style="font-size:.75rem;color:var(--green);padding:4px 0 10px">
         ✅ Detalles suficientes — listo para confirmar.</div>`;
     } else {
+      item._clarityStatus = 'asking';
+      item._missingFields = Array.isArray(res.missing_fields) ? res.missing_fields : ['detalles'];
+      item._validationMessage = res.question || 'Falta información para identificar el producto.';
       item._question = res.question || '';
       el.innerHTML = `
         <div style="margin-top:4px">
           <div style="font-size:.72rem;color:#fbbf24;font-weight:600;margin-bottom:6px;
             text-transform:uppercase;letter-spacing:.06em">⚠️ Paso 2 — Detalle faltante</div>
           <div style="font-size:.8rem;color:#fbbf24;margin-bottom:10px;line-height:1.5">
-            💡 ${res.question}</div>
+            💡 ${item._validationMessage}</div>
+          <div style="font-size:.72rem;color:var(--muted);margin-bottom:8px">Campos faltantes: ${item._missingFields.join(', ')}</div>
           <div style="font-size:.68rem;color:var(--muted);margin-bottom:4px">Tu respuesta (actualiza el nombre o las notas arriba)</div>
           <input id="wiz-clarity-answer" placeholder="ej: botella 1.5L"
             value="${(item._answer||'').replace(/"/g,'&quot;')}"
@@ -3027,7 +3054,11 @@ Responde SOLO con JSON: {"ok":true} si está bien identificado, o {"ok":false,"q
     }
   } catch(e) {
     console.warn('Wizard Step 2 skipped:', e);
-    el.innerHTML = '';
+    item._clarityStatus = 'pending';
+    item._missingFields = ['detalles'];
+    item._validationMessage = 'No se pudo validar con Gemini. Intentá de nuevo.';
+    el.innerHTML = `<div style="font-size:.75rem;color:var(--warn);padding:4px 0 10px">
+      ⚠️ No se pudo validar con Gemini — revisá el nombre y las notas.</div>`;
   }
 }
 
@@ -3040,7 +3071,17 @@ function wizardConfirmItem() {
   item.quantity   = Math.max(0, parseFloat(document.getElementById('wiz-qty')?.value)   || 0);
   item.unit_price = Math.max(0, parseFloat(document.getElementById('wiz-price')?.value) || 0);
   item.line_total = parseFloat((item.quantity * item.unit_price).toFixed(2));
-  item._status    = 'done';
+
+  if (!item._catalog) {
+    if (item._clarityStatus !== 'complete' || (item._missingFields && item._missingFields.length > 0)) {
+      const missing = item._missingFields && item._missingFields.length ? item._missingFields.join(', ') : 'detalles';
+      toast(`⚠️ No se puede confirmar: faltan detalles (${missing})`);
+      renderWizardStep2();
+      return;
+    }
+  }
+
+  item._status = 'done';
   renderWizardPills();
   wizardAdvance();
 }

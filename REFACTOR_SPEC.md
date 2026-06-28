@@ -156,6 +156,23 @@ It is intended as a base for refactors where the code is changed by adjusting th
 - Catalog-seeded manual entries can default to `validated` if they contain full product detail.
 - Receipt-scanned items should always start `pending` and move to `validated` only after a successful validation pass.
 
+### Deterministic clarity validation
+
+- Validation must be driven by a fixed checklist of required product detail fields.
+- The app should not rely on Gemini to choose which missing detail to ask for in each pass.
+- Required fields should include at least: `brand`, `product_type`, and `size/volume/weight` plus `package_format` or `variant` when applicable.
+- The validator should return structured JSON with one of these results:
+  - `{"ok": true}` when all required fields are present and the item is uniquely identifiable.
+  - `{"ok": false, "missing_fields": ["size","package_format"], "question": "¿Cuál es el tamaño y el envase de este producto?"}` when information is incomplete.
+- The UI should show the same deterministic missing-field guidance until the item is completed.
+- If multiple fields are missing, the prompt should request all missing fields in a single response rather than an arbitrary follow-up.
+- The item data model should include explicit validation state fields such as:
+  - `missingFields: string[]`
+  - `clarityStatus: 'pending' | 'asking' | 'complete'`
+  - `validationMessage: string`
+- Receipt item confirmation should only become allowed when `missingFields.length === 0` and `clarityStatus === 'complete'`.
+- If Gemini returns invalid JSON or an unexpected response, the app should show a retryable inline error and keep the item in `pending` state.
+
 ### Draft gating rule
 
 - The `save draft` action is only available when every receipt-scanned item is `validated`.
@@ -180,6 +197,36 @@ It is intended as a base for refactors where the code is changed by adjusting th
 - All Gemini prompts must ask for JSON-only responses.
 - The code must sanitize and parse the first bracketed JSON object/array.
 - If Gemini returns invalid JSON, the app shows an inline error and lets the user retry.
+
+### Deterministic clarity-check prompt contract
+
+- The clarity prompt should explicitly list the required fields to verify.
+- It should request a structured JSON response, not free-form text.
+- Example prompt:
+
+```text
+Sos un revisor de un producto comprado en un supermercado argentino.
+Nombre: "{name}"
+Notas: "{notes}"
+
+Verificá si el producto contiene todos los detalles necesarios para identificarlo de forma única:
+- marca
+- tipo de producto
+- tamaño, volumen o peso
+- envase/formato o variante
+
+Responde SOLO con JSON.
+Si está correcto, devuelve:
+{"ok": true}
+Si falta información, devuelve:
+{"ok": false, "missing_fields": ["size","package_format"], "question": "¿Cuál es el tamaño y el envase de este producto?"}
+```
+
+- The response parser should:
+  - strip code fences and markdown
+  - parse the first valid JSON object
+  - default to `{ ok: false, missing_fields: ['detalles'], question: 'No se pudo validar el producto. Por favor revisá el nombre y las notas.' }` on failure
+  - preserve missing field names for UI guidance
 
 ## Refactor Recipe
 
