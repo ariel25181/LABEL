@@ -388,22 +388,6 @@
       cursor:pointer; touch-action:manipulation; }
     .chip-remove { color:var(--red); font-weight:700; font-size:.8rem; }
 
-    .status-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
-    .status-dot.pending { background:#facc15; box-shadow:0 0 0 5px rgba(250,204,21,.12); }
-    .status-dot.validated { background:#4ade80; box-shadow:0 0 0 5px rgba(74,222,128,.12); }
-    .status-dot.validating { background:#38bdf8; box-shadow:0 0 0 5px rgba(56,189,248,.12); }
-    .validation-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
-      padding:12px 16px; border-bottom:1px solid var(--border); }
-    .validation-row:last-child { border-bottom:none; }
-    .validation-meta { flex:1; min-width:0; }
-    .validation-name { font-size:.88rem; font-weight:600; color:var(--text); margin-bottom:5px; }
-    .validation-note { font-size:.72rem; color:var(--muted); margin-bottom:4px; }
-    .validation-actions { display:flex; gap:8px; flex-shrink:0; align-items:center; }
-    .validation-preview { padding:14px 18px; border-top:1px solid var(--border); background:rgba(74,222,128,.05); border-radius:14px; margin:12px 16px 0; }
-    .validation-preview h3 { font-size:.92rem; margin-bottom:6px; }
-    .validation-preview .preview-line { display:flex; justify-content:space-between; gap:10px; font-size:.85rem; margin-bottom:6px; }
-    .validation-preview .preview-total { font-size:1rem; font-weight:700; color:var(--green); }
-
     /* ── ADMIN MODAL ── */
     .admin-modal { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.85);
       display:none; align-items:center; justify-content:center; padding:20px; }
@@ -993,32 +977,98 @@
 <input type="file" id="receipt-input" accept="image/*"
   style="display:none" onchange="handleReceiptPhoto(this)"/>
 
-<!-- RECEIPT REVIEW OVERLAY -->
+<!-- ══════════════════════════════════
+     RECEIPT SCAN LOADING (OCR in progress)
+══════════════════════════════════ -->
 <div class="ov" id="ov-receipt" style="align-items:stretch;padding-bottom:0;">
   <div class="sheet" style="max-height:100dvh;height:100dvh;border-radius:0;display:flex;flex-direction:column;">
     <div class="shdr">
       <div>
-        <div class="stitle">📷 Ticket escaneado</div>
-        <div class="ssub" id="receipt-ssub">Revisá los productos detectados</div>
+        <div class="stitle">📷 Escaneando ticket</div>
+        <div class="ssub" id="receipt-ssub">Analizando con Gemini…</div>
       </div>
       <div class="sclose" onclick="closeReceiptScanner()">✕</div>
     </div>
-    <div id="receipt-loading" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px">
-      <div class="spin" style="width:40px;height:40px;border-width:4px"></div>
-      <div style="color:var(--muted);font-size:.9rem;text-align:center">Analizando ticket con IA…<br>Esto puede tardar unos segundos</div>
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px">
+      <div class="spin" style="width:44px;height:44px;border-width:4px"></div>
+      <div style="color:var(--muted);font-size:.9rem;text-align:center;line-height:1.6">
+        Analizando ticket con Gemini…<br>Esto puede tardar unos segundos
+      </div>
     </div>
-    <div id="receipt-results" style="display:none;flex:1;overflow-y:auto;padding:8px 16px"></div>
-    <div id="receipt-draft-preview" class="validation-preview" style="display:none">
-      <h3>Draft preview</h3>
-      <div id="receipt-preview-items"></div>
-      <div class="preview-line"><span>Total</span><span id="receipt-preview-total">$0.00</span></div>
+    <!-- Error state -->
+    <div id="receipt-error" style="display:none;flex:1;padding:24px 20px">
+      <div style="color:var(--red);text-align:center;line-height:1.7;font-size:.85rem" id="receipt-error-msg"></div>
     </div>
-    <div id="receipt-footer" style="display:none;flex-shrink:0;padding:10px 16px;padding-bottom:env(safe-area-inset-bottom,16px);background:var(--surface);border-top:1px solid var(--b2);display:flex;gap:8px;flex-wrap:wrap">
-      <button class="bcancel" onclick="closeReceiptScanner()">Cancelar</button>
-      <button class="btn-g" id="receipt-scan-more-btn" onclick="scanMoreReceipt()">📷 Scan more</button>
-      <button class="btn-g" id="receipt-add-manual-btn" onclick="closeReceiptScannerAndEdit()">✏️ Add manually</button>
-      <button class="bsave" id="receipt-validate-btn" onclick="startReceiptValidation()">⚠️ Validate next</button>
-      <button class="bsave" id="receipt-load-btn" onclick="finalizeReceiptDraft()" disabled>✅ Save draft</button>
+    <div id="receipt-error-footer" style="display:none;flex-shrink:0;padding:10px 16px;
+      padding-bottom:env(safe-area-inset-bottom,14px);background:var(--surface);
+      border-top:1px solid var(--b2)">
+      <button class="bcancel" style="width:100%" onclick="closeReceiptScanner()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     RECEIPT WIZARD — product-by-product validation
+══════════════════════════════════ -->
+<div class="ov" id="ov-wizard" style="align-items:stretch;padding-bottom:0;">
+  <div class="sheet" style="max-height:100dvh;height:100dvh;border-radius:0;display:flex;flex-direction:column;">
+
+    <!-- Header -->
+    <div class="shdr" style="padding-bottom:8px">
+      <div style="flex:1;min-width:0">
+        <div class="stitle">🧾 Revisando ticket</div>
+        <div class="ssub" id="wizard-ssub">Producto 1 de N</div>
+      </div>
+      <div class="sclose" onclick="closeWizard()">✕</div>
+    </div>
+
+    <!-- Product pills strip — horizontal scroll, status icons -->
+    <div id="wizard-pills" style="overflow-x:auto;white-space:nowrap;padding:6px 14px 8px;
+      border-bottom:1px solid var(--b2);-webkit-overflow-scrolling:touch;flex-shrink:0"></div>
+
+    <!-- Current product validation area -->
+    <div id="wizard-body" style="flex:1;overflow-y:auto;padding:14px 16px 8px"></div>
+
+    <!-- Footer -->
+    <div id="wizard-footer" style="flex-shrink:0;padding:10px 16px;
+      padding-bottom:env(safe-area-inset-bottom,14px);background:var(--surface);
+      border-top:1px solid var(--b2);display:flex;gap:8px;align-items:center">
+      <button class="bcancel" style="flex:1" onclick="wizardSkipItem()">Ignorar →</button>
+      <button class="bsave" id="wizard-next-btn" onclick="wizardConfirmItem()" disabled
+        style="flex:2">✓ Confirmar producto</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     RECEIPT DRAFT — final preview before saving to session
+══════════════════════════════════ -->
+<div class="ov" id="ov-draft" style="align-items:stretch;padding-bottom:0;">
+  <div class="sheet" style="max-height:100dvh;height:100dvh;border-radius:0;display:flex;flex-direction:column;">
+    <div class="shdr">
+      <div>
+        <div class="stitle">📋 Vista previa del ticket</div>
+        <div class="ssub" id="draft-ssub">Revisá antes de guardar</div>
+      </div>
+    </div>
+
+    <div id="draft-list" style="flex:1;overflow-y:auto;padding:8px 16px 8px"></div>
+
+    <div id="draft-footer" style="flex-shrink:0;gap:8px;flex-wrap:wrap;padding:10px 16px;
+      padding-bottom:env(safe-area-inset-bottom,14px);background:var(--surface);
+      border-top:1px solid var(--b2);display:flex">
+      <button class="bcancel" onclick="draftAddManual()"
+        style="flex:1;min-width:100px">＋ Manual</button>
+      <button class="bcancel" onclick="draftAddScan()"
+        style="flex:1;min-width:100px">📷 Scan</button>
+      <button id="draft-review-skipped-btn" class="bcancel" onclick="draftReviewSkipped()"
+        style="flex:1;min-width:100px;display:none;border-color:rgba(251,191,36,.4);color:#fbbf24">
+        ⚠️ Revisar ignorados
+      </button>
+      <button class="bsave" onclick="draftSaveToSession()"
+        style="flex:2;min-width:200px;background:linear-gradient(135deg,#16a34a,#15803d)">
+        💾 Cargar a la sesión
+      </button>
     </div>
   </div>
 </div>
@@ -2461,8 +2511,6 @@ function addItemToList() {
     quantity:     qty,
     line_total:   lineTotal,
     notes,
-    status:       currentProductSel ? 'validated' : 'pending',
-    validationMessage: currentProductSel ? '' : 'Pendiente de validación',
   };
 
   if (editingItemIndex !== null) {
@@ -2572,11 +2620,7 @@ function renderChips() {
     chip.style.cursor = 'pointer';
     chip.style.touchAction = 'manipulation';
     chip.title = 'Tocá para editar';
-    const status = item.status || 'validated';
-    const statusLabel = status === 'validated' ? 'Validado' : status === 'validating' ? 'Validando' : 'Pendiente';
-    chip.innerHTML = `<span class="status-dot ${status}" title="${statusLabel}"></span>
-      <span>${item.product_name} · ${fmt(item.line_total)}</span>
-      <span class="chip-remove" data-idx="${idx}">✕</span>`;
+    chip.innerHTML = `<span>${item.product_name} · ${fmt(item.line_total)}</span><span class="chip-remove" data-idx="${idx}">✕</span>`;
 
     // Tap anywhere on the chip (except ✕) to edit it
     chip.addEventListener('click', e => {
@@ -2611,411 +2655,566 @@ function renderChips() {
 //   CORS. Gemini supports HTTP-referrer-restricted client keys,
 //   which is the safe pattern — same as the Google Maps key.)
 // ══════════════════════════════════════════
-let scannedReceiptItems = [];
-let receiptScanGen = 0; // increments on every new scan; used to discard stale/superseded responses
+// ══════════════════════════════════════════
+//  RECEIPT SCANNER & WIZARD ENGINE
+//  Gemini OCR → product-by-product wizard → draft preview
+// ══════════════════════════════════════════
+let receiptScanGen = 0;  // increments per scan — discards stale responses
 
+// ── Open camera ───────────────────────────────────
 function openReceiptScanner() {
-  // Discard any unsaved in-progress chip edit before starting a fresh scan
-  // (does NOT touch already-saved currentItems — only resets the form)
+  if (!geminiApiKey) {
+    if (navigator.vibrate) navigator.vibrate([80,40,80]);
+    toast('⚠️ Falta configurar tu clave de Gemini — andá a Configuración (menú ☰)', 4500);
+    return;
+  }
   if (editingItemIndex !== null) cancelEditItem();
   document.getElementById('receipt-input').click();
 }
 
-// Closes the receipt overlay and fully resets its state (Cancel / ✕)
+// ── Close loading overlay and discard in-flight scan ─
 function closeReceiptScanner() {
-  receiptScanGen++; // invalidate any in-flight request so it can't apply stale results
-  scannedReceiptItems = [];
+  receiptScanGen++;
   closeOv('ov-receipt');
 }
 
 // ── Gemini helper ─────────────────────────────────
-// opts.tools          → e.g. [{ google_search: {} }] to let Gemini search the web
-// opts.disableThinking → true for simple extraction tasks (faster/cheaper);
-//                         left enabled (default) when using google_search, since
-//                         the model needs to reason about what to search for
 async function callGemini(parts, opts = {}) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
   const body = { contents: [{ parts }] };
   if (opts.tools) body.tools = opts.tools;
   if (opts.disableThinking) body.generationConfig = { thinkingConfig: { thinkingBudget: 0 } };
-
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
   const data = await resp.json();
-  if (!resp.ok) {
-    const msg = data?.error?.message || `HTTP ${resp.status}`;
-    throw new Error(msg);
-  }
-  // Find the first part that actually has text (grounded/tool responses can
-  // include extra non-text parts)
+  if (!resp.ok) throw new Error(data?.error?.message || `HTTP ${resp.status}`);
   const textPart = data.candidates?.[0]?.content?.parts?.find(p => p.text);
-  const text = textPart?.text;
-  if (!text) throw new Error('Gemini no devolvió texto (revisá tu clave o el formato de la imagen)');
-  return text;
+  if (!textPart?.text) throw new Error('Gemini no devolvió texto');
+  return textPart.text;
 }
 
-// ── Downscale image before upload (faster, more reliable on mobile data) ──
-function resizeImageForUpload(file, maxDim = 1600, quality = 0.85) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const objUrl = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(objUrl);
-      let { width, height } = img;
-      if (width > maxDim || height > maxDim) {
-        const scale = maxDim / Math.max(width, height);
-        width  = Math.round(width  * scale);
-        height = Math.round(height * scale);
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
-    };
-    img.onerror = () => reject(new Error('No se pudo procesar la imagen'));
-    img.src = objUrl;
-  });
-}
-
-// ── Receipt photo → Gemini ────────────────────────
+// ── Handle photo: OCR → open wizard ───────────────
 async function handleReceiptPhoto(input) {
   const file = input.files[0];
   if (!file) return;
   input.value = '';
+  if (!geminiApiKey) { toast('⚠️ Configurá tu clave de Gemini en Configuración'); return; }
 
-  if (!geminiApiKey) {
-    openOv('ov-receipt');
-    document.getElementById('receipt-loading').style.display = 'none';
-    document.getElementById('receipt-results').style.display  = 'block';
-    document.getElementById('receipt-results').innerHTML =
-      `<div style="color:var(--red);padding:24px;text-align:center">
-        ⚠️ Falta configurar tu clave de Gemini en Configuración.<br>
-        <small style="color:var(--muted);">No puedes escanear tickets hasta completar la clave en Ajustes.</small>
-      </div>`;
-    document.getElementById('receipt-footer').style.display   = 'flex';
-    document.getElementById('receipt-scan-more-btn').style.display = 'flex';
-    document.getElementById('receipt-add-manual-btn').style.display = 'flex';
-    document.getElementById('receipt-validate-btn').style.display   = 'none';
-    document.getElementById('receipt-load-btn').style.display       = 'none';
-    toast('⚠️ Configurá tu clave de Gemini en Configuración');
-    return;
-  }
-
-  // Token for this specific scan — if a newer scan starts before this one
-  // resolves, this one's results are discarded instead of overwriting fresher data
-  const myGen = ++receiptScanGen;
-
-  document.getElementById('receipt-loading').style.display = 'flex';
-  document.getElementById('receipt-results').style.display  = 'none';
-  document.getElementById('receipt-footer').style.display   = 'none';
-  document.getElementById('receipt-ssub').textContent = 'Analizando ticket con Gemini…';
+  // Show loading overlay
+  const errDiv  = document.getElementById('receipt-error');
+  const errFoot = document.getElementById('receipt-error-footer');
+  errDiv.style.display  = 'none';
+  errFoot.style.display = 'none';
+  document.getElementById('receipt-ssub').textContent = 'Analizando con Gemini…';
   openOv('ov-receipt');
 
-  try {
-    // Downscale large camera photos before upload — faster + more reliable;
-    // falls back to the raw file if anything goes wrong with the canvas path
-    let base64, mediaType;
-    try {
-      ({ base64, mediaType } = await resizeImageForUpload(file));
-    } catch {
-      base64 = await new Promise((res,rej) => {
-        const r = new FileReader();
-        r.onload  = () => res(r.result.split(',')[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      mediaType = file.type || 'image/jpeg';
-    }
+  const myGen = ++receiptScanGen;
 
-    const PROMPT = `This is a supermarket receipt (in Spanish, Argentine pesos). Extract ALL purchased line items.
-Return ONLY a valid JSON array, no markdown, no explanation, no code fences. Each object:
+  try {
+    const base64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload  = () => res(r.result.split(',')[1]);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+    const mediaType = file.type || 'image/jpeg';
+
+    const PROMPT = `This is a supermarket receipt (Argentine pesos). Extract ALL purchased line items.
+Return ONLY a valid JSON array, no markdown, no explanation. Each object:
 {"name":"product name as written","quantity":1,"unit_price":0,"line_total":0}
-Rules:
-- If unit price is missing but line total and quantity are shown, compute unit_price = line_total / quantity.
-- If quantity isn't explicit, default to 1.
-- Ignore subtotal/total/tax/discount lines — only actual purchased products.
-- Numbers must be plain numbers (no thousands separators, use . for decimals).`;
+Rules: compute unit_price = line_total / quantity if not explicit. Default quantity to 1. Ignore subtotal/tax/discount lines. Numbers as plain decimals.`;
 
     const rawText = await callGemini([
       { inline_data: { mime_type: mediaType, data: base64 } },
       { text: PROMPT }
     ], { disableThinking: true });
 
-    // A newer scan superseded this one while we were waiting — discard silently
-    if (myGen !== receiptScanGen) return;
+    if (myGen !== receiptScanGen) return; // stale
 
-    let items;
-    try {
-      let cleaned = rawText.replace(/```json|```/g, '').trim();
-      // Be forgiving: if Gemini adds any stray text around the array despite
-      // instructions, extract just the [...] portion instead of failing outright
-      const start = cleaned.indexOf('[');
-      const end   = cleaned.lastIndexOf(']');
-      if (start !== -1 && end !== -1 && end > start) {
-        cleaned = cleaned.slice(start, end + 1);
-      }
-      items = JSON.parse(cleaned);
-    } catch {
-      throw new Error('No se pudo interpretar la respuesta de Gemini. Probá con una foto más clara.');
-    }
+    let cleaned = rawText.replace(/```json|```/g, '').trim();
+    const s = cleaned.indexOf('['), e = cleaned.lastIndexOf(']');
+    if (s !== -1 && e !== -1 && e > s) cleaned = cleaned.slice(s, e + 1);
 
-    scannedReceiptItems = (Array.isArray(items) ? items : []).map(i => ({
-      name: i.name || '',
-      quantity: Number(i.quantity) || 1,
-      unit_price: Number(i.unit_price) || 0,
-      line_total: Number(i.line_total) || (Number(i.unit_price)||0) * (Number(i.quantity)||1),
-      _source: 'gemini',
-      status: 'pending',
-      validationMessage: '',
-    }));
+    const rawItems = JSON.parse(cleaned);
 
-    renderReceiptResults(scannedReceiptItems);
+    closeOv('ov-receipt');
+    openWizard((Array.isArray(rawItems) ? rawItems : []).map((i, idx) => ({
+      id:         `receipt_${Date.now()}_${idx}`,
+      name:       i.name || '',
+      quantity:   Math.max(0, Number(i.quantity)  || 1),
+      unit_price: Math.max(0, Number(i.unit_price) || 0),
+      line_total: Math.max(0, Number(i.line_total) || (Number(i.unit_price)||0) * (Number(i.quantity)||1)),
+      notes:      '',
+      _status:    'pending',    // pending | done | skipped
+      _catalog:   null,         // selected catalog product or null
+      _question:  null,         // Gemini clarity question or null
+      _answer:    '',           // user's answer to clarity question
+    })));
+
   } catch(e) {
-    if (myGen !== receiptScanGen) return; // stale — a newer scan is already showing
+    if (myGen !== receiptScanGen) return;
     console.error('Receipt scan error:', e);
-    document.getElementById('receipt-loading').style.display = 'none';
-    document.getElementById('receipt-results').innerHTML =
-      `<div style="color:var(--red);padding:24px;text-align:center">
-        ❌ No se pudo leer el ticket.<br>
-        <small style="color:var(--muted)">${(e.message||'Error desconocido').replace(/</g,'&lt;')}</small><br><br>
-        <span style="font-size:.72rem;color:var(--muted)">Tip: verificá tu clave de Gemini en Configuración, o probá con una foto más nítida.</span>
-      </div>`;
-    document.getElementById('receipt-results').style.display = 'block';
-    document.getElementById('receipt-footer').style.display  = 'flex';
-    document.getElementById('receipt-load-btn').style.display = 'none';
+    document.querySelector('#ov-receipt .spin')?.parentElement && (document.querySelector('#ov-receipt > div > div:not(.shdr)').style.display = 'none');
+    errDiv.innerHTML = `<div style="text-align:center;padding:16px">
+      <div style="font-size:2rem;margin-bottom:12px">❌</div>
+      <div style="color:var(--red);font-weight:600;margin-bottom:8px">No se pudo leer el ticket</div>
+      <div style="color:var(--muted);font-size:.8rem;line-height:1.6">${(e.message||'Error desconocido').replace(/</g,'&lt;')}</div>
+      <div style="color:var(--muted);font-size:.72rem;margin-top:10px">Verificá tu clave de Gemini o probá con una foto más nítida.</div>
+    </div>`;
+    errDiv.style.display  = 'block';
+    errFoot.style.display = 'block';
   }
 }
 
-// ── Render receipt review screen ──────────────────
-function renderReceiptResults(items) {
-  document.getElementById('receipt-loading').style.display = 'none';
-  document.getElementById('receipt-draft-preview').style.display = 'none';
-  if (!items.length) {
-    document.getElementById('receipt-results').innerHTML =
-      '<div style="color:var(--muted);padding:24px;text-align:center">No se detectaron productos. Probá con una foto más nítida y bien encuadrada.</div>';
-    document.getElementById('receipt-results').style.display = 'block';
-    document.getElementById('receipt-footer').style.display  = 'flex';
-    document.getElementById('receipt-scan-more-btn').style.display = 'flex';
-    document.getElementById('receipt-add-manual-btn').style.display = 'flex';
-    document.getElementById('receipt-validate-btn').style.display = 'none';
-    document.getElementById('receipt-load-btn').style.display = 'none';
-    return;
-  }
+// ══════════════════════════════════════════
+//  RECEIPT WIZARD — product-by-product
+// ══════════════════════════════════════════
+let wizardItems = [];      // array of wizard item objects
+let wizardIdx   = 0;       // index of item currently being validated
+let wizardCatalogMatches = []; // catalog matches for current item
 
-  const fmt   = n => '$' + Number(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
-  const total = items.reduce((s,i)=>s+(i.line_total||0),0);
-  document.getElementById('receipt-ssub').textContent =
-    `${items.length} producto${items.length>1?'s':''} detectado${items.length>1?'s':''} · Total ${fmt(total)} — revisá antes de validar`;
+function openWizard(items) {
+  if (!items.length) { toast('No se detectaron productos en el ticket'); return; }
+  wizardItems = items;
+  wizardIdx   = 0;
+  renderWizardPills();
+  openOv('ov-wizard');
+  // Small delay so the overlay is fully visible before async wizardGoTo renders into it
+  setTimeout(() => wizardGoTo(0), 80);
+}
 
-  const html = items.map((item,idx) => {
-    const statusClass = item.status === 'validated' ? 'validated' : item.status === 'validating' ? 'validating' : 'pending';
-    const statusLabel = item.status === 'validated' ? 'Validated' : item.status === 'validating' ? 'Validating' : 'Pending';
-    const warning = item.validationMessage ? `<div class="validation-note">${item.validationMessage}</div>` : '';
-    return `
-      <div class="validation-row" data-idx="${idx}">
-        <div class="status-dot ${statusClass}" title="${statusLabel}"></div>
-        <div class="validation-meta">
-          <div class="validation-name">${(item.name||'').replace(/"/g,'&quot;')}</div>
-          ${warning}
-          <div class="validation-note">Cantidad: ${item.quantity || 1} · Precio unitario: ${fmt(item.unit_price || 0)}</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-            <input value="${(item.name||'').replace(/"/g,'&quot;')}" data-idx="${idx}" data-field="name"
-              oninput="updateScannedItem(this)"
-              style="flex:2;min-width:120px;background:var(--s2);border:1px solid var(--b2);border-radius:10px;padding:8px 10px;color:var(--text);font-size:.82rem;font-family:var(--font);"/>
-            <input type="number" min="0" value="${item.quantity||1}" data-idx="${idx}" data-field="quantity"
-              oninput="updateScannedItem(this)"
-              style="width:84px;background:var(--s2);border:1px solid var(--b2);border-radius:10px;padding:8px 10px;color:var(--text);font-size:.82rem;font-family:var(--font);"/>
-            <input type="number" min="0" value="${item.unit_price||0}" data-idx="${idx}" data-field="unit_price"
-              oninput="updateScannedItem(this)"
-              style="width:110px;background:var(--s2);border:1px solid var(--b2);border-radius:10px;padding:8px 10px;color:var(--text);font-size:.82rem;font-family:var(--font);"/>
-            <div style="width:100px;padding:8px 10px;background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.2);border-radius:10px;font-size:.82rem;font-weight:600;color:var(--green);text-align:center;">${fmt(item.line_total||0)}</div>
+function closeWizard() {
+  closeOv('ov-wizard');
+  wizardItems = [];
+  wizardIdx   = 0;
+}
+
+// ── Navigate to a specific item ───────────────────
+async function wizardGoTo(idx) {
+  wizardIdx = idx;
+  const item = wizardItems[idx];
+  if (!item) return;
+
+  document.getElementById('wizard-ssub').textContent = `Producto ${idx + 1} de ${wizardItems.length}`;
+  renderWizardPills();
+
+  const body   = document.getElementById('wizard-body');
+  const nextBtn = document.getElementById('wizard-next-btn');
+  nextBtn.disabled = false;
+  nextBtn.textContent = '✓ Confirmar producto';
+
+  // ── Show product card ──────────────────────────
+  body.innerHTML = `
+    <div style="background:var(--s2);border:1px solid var(--b2);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
+        <div style="flex:1">
+          <div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Producto detectado</div>
+          <input id="wiz-name" value="${(item.name||'').replace(/"/g,'&quot;')}"
+            oninput="wizardItems[wizardIdx].name=this.value;renderWizardPills()"
+            style="width:100%;background:var(--s3);border:1px solid var(--b2);border-radius:8px;
+            padding:7px 10px;color:var(--text);font-size:.9rem;font-family:var(--font);font-weight:600"/>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <div style="flex:1">
+          <div style="font-size:.62rem;color:var(--muted);margin-bottom:3px">CANT.</div>
+          <input type="number" min="0" id="wiz-qty" value="${item.quantity}"
+            oninput="wizardUpdateCalc()"
+            style="width:100%;background:var(--s3);border:1px solid var(--b2);border-radius:8px;
+            padding:7px 8px;color:var(--text);font-size:.88rem;font-family:var(--font)"/>
+        </div>
+        <div style="flex:1.5">
+          <div style="font-size:.62rem;color:var(--muted);margin-bottom:3px">PRECIO UNIT.</div>
+          <input type="number" min="0" id="wiz-price" value="${item.unit_price}"
+            oninput="wizardUpdateCalc()"
+            style="width:100%;background:var(--s3);border:1px solid var(--b2);border-radius:8px;
+            padding:7px 8px;color:var(--text);font-size:.88rem;font-family:var(--font)"/>
+        </div>
+        <div style="flex:1.5">
+          <div style="font-size:.62rem;color:var(--muted);margin-bottom:3px">TOTAL</div>
+          <div id="wiz-total" style="padding:7px 8px;background:rgba(74,222,128,.08);
+            border:1px solid rgba(74,222,128,.2);border-radius:8px;
+            font-size:.88rem;font-weight:700;color:var(--green)">
+            $${Number(item.line_total).toLocaleString('es-AR',{minimumFractionDigits:2})}
           </div>
         </div>
-        <div class="validation-actions">
-          <button class="btn-g" onclick="editScannedItem(${idx})">✏️ Focus</button>
-          <button class="btn-g" onclick="removeScannedItem(${idx})">✕ Remove</button>
-        </div>
-      </div>`;
-  }).join('');
+      </div>
+      <div style="margin-top:8px">
+        <div style="font-size:.62rem;color:var(--muted);margin-bottom:3px">NOTAS (opcional)</div>
+        <input id="wiz-notes" value="${(item.notes||'').replace(/"/g,'&quot;')}"
+          placeholder="ej: lata 354ml, oferta 3x2…"
+          oninput="wizardItems[wizardIdx].notes=this.value"
+          style="width:100%;background:var(--s3);border:1px solid var(--b2);border-radius:8px;
+          padding:7px 10px;color:var(--text);font-size:.8rem;font-family:var(--font)"/>
+      </div>
+    </div>
+    <div id="wiz-step1"></div>
+    <div id="wiz-step2"></div>
+  `;
 
-  document.getElementById('receipt-results').innerHTML = html;
-  document.getElementById('receipt-results').style.display = 'block';
-  document.getElementById('receipt-footer').style.display  = 'flex';
-  document.getElementById('receipt-scan-more-btn').style.display = 'flex';
-  document.getElementById('receipt-add-manual-btn').style.display = 'flex';
-  document.getElementById('receipt-validate-btn').style.display = 'flex';
-  document.getElementById('receipt-load-btn').style.display = 'inline-flex';
-  document.getElementById('receipt-load-btn').disabled = !items.every(i => i.status === 'validated');
-  updateDraftPreview();
+  // ── Run Step 1: catalog match ──────────────────
+  document.getElementById('wiz-step1').innerHTML = `
+    <div style="color:var(--muted);font-size:.78rem;padding:8px 0">
+      <div class="spin" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></div>
+      Buscando en catálogo…
+    </div>`;
+
+  wizardCatalogMatches = [];
+  try {
+    if (SB) {
+      const res = await findCatalogSimilarities([{ it: { product_name: item.name }, i: 0 }]);
+      wizardCatalogMatches = res[0]?.matches || [];
+    }
+  } catch(e) { wizardCatalogMatches = []; }
+
+  // Check we're still on the same item (user may have navigated)
+  if (wizardIdx !== idx) return;
+  renderWizardStep1();
 }
 
-function updateDraftPreview() {
-  const items = scannedReceiptItems;
-  if (!items.length) {
-    document.getElementById('receipt-draft-preview').style.display = 'none';
-    return;
-  }
-  const preview = document.getElementById('receipt-preview-items');
-  const totalEl = document.getElementById('receipt-preview-total');
-  const fmt = n => '$' + Number(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
-  preview.innerHTML = items.map(item => `
-    <div class="preview-line"><span>${item.name || '—'}</span><span>${fmt(item.line_total || 0)}</span></div>`).join('');
-  const total = items.reduce((s,i)=>s+(i.line_total||0),0);
-  totalEl.textContent = fmt(total);
-  document.getElementById('receipt-draft-preview').style.display = 'block';
+function wizardUpdateCalc() {
+  const qty   = Math.max(0, parseFloat(document.getElementById('wiz-qty')?.value)   || 0);
+  const price = Math.max(0, parseFloat(document.getElementById('wiz-price')?.value) || 0);
+  const total = parseFloat((qty * price).toFixed(2));
+  wizardItems[wizardIdx].quantity   = qty;
+  wizardItems[wizardIdx].unit_price = price;
+  wizardItems[wizardIdx].line_total = total;
+  const el = document.getElementById('wiz-total');
+  if (el) el.textContent = '$' + total.toLocaleString('es-AR',{minimumFractionDigits:2});
 }
 
+// ── Step 1: catalog options ────────────────────────
+function renderWizardStep1() {
+  const el = document.getElementById('wiz-step1');
+  if (!el) return;
+  const item = wizardItems[wizardIdx];
 
-function updateScannedItem(el) {
-  const idx   = parseInt(el.dataset.idx);
-  const field = el.dataset.field;
-  let val = field === 'name' ? el.value : Math.max(0, parseFloat(el.value) || 0);
-  const item = scannedReceiptItems[idx];
-  item[field] = val;
-  item.line_total = parseFloat((item.unit_price * item.quantity).toFixed(2));
-  item.status = 'pending';
-  item.validationMessage = 'Edited, pending validation';
-
-  const ltEl = document.getElementById(`receipt-lt-${idx}`);
-  if (ltEl) ltEl.textContent = '$' + item.line_total.toLocaleString('es-AR', {minimumFractionDigits:2});
-
-  const fmt = n => '$' + Number(n).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2});
-  const total = scannedReceiptItems.reduce((s,i) => s + (i.line_total||0), 0);
-  const ssub = document.getElementById('receipt-ssub');
-  if (ssub) {
-    const n = scannedReceiptItems.length;
-    ssub.textContent = `${n} producto${n!==1?'s':''} detectado${n!==1?'s':''} · Total ${fmt(total)} — revisá antes de validar`;
-  }
-  renderReceiptResults(scannedReceiptItems);
-}
-
-function removeScannedItem(idx) {
-  scannedReceiptItems.splice(idx, 1);
-  renderReceiptResults(scannedReceiptItems);
-}
-
-function editScannedItem(idx) {
-  const item = scannedReceiptItems[idx];
-  if (!item) return;
-  item.status = 'pending';
-  item.validationMessage = 'Pending validation before saving';
-  renderReceiptResults(scannedReceiptItems);
-}
-
-async function startReceiptValidation() {
-  const nextIdx = scannedReceiptItems.findIndex(i => i.status !== 'validated');
-  if (nextIdx === -1) {
-    toast('Todos los productos ya están validados.');
+  if (!wizardCatalogMatches.length) {
+    el.innerHTML = `<div style="font-size:.75rem;color:var(--muted);padding:4px 0 10px">
+      ℹ️ Sin coincidencias en el catálogo — se guardará como nuevo producto.</div>`;
+    renderWizardStep2();
     return;
   }
 
-  scannedReceiptItems[nextIdx].status = 'validating';
-  scannedReceiptItems[nextIdx].validationMessage = 'Checking with AI…';
-  renderReceiptResults(scannedReceiptItems);
+  el.innerHTML = `
+    <div style="margin-bottom:12px">
+      <div style="font-size:.72rem;color:var(--cyan);font-weight:600;margin-bottom:8px;
+        text-transform:uppercase;letter-spacing:.06em">🔗 Paso 1 — ¿Es alguno de estos?</div>
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:8px;line-height:1.4">
+        Vincularlo al catálogo permite comparar precios entre comercios.</div>
+
+      <label class="wiz-cat-opt" data-cat="none" onclick="wizardSelectCatalog(this,null)"
+        style="display:flex;align-items:flex-start;gap:10px;padding:9px 11px;border-radius:10px;
+        background:var(--s2);border:2px solid var(--cyan);cursor:pointer;touch-action:manipulation;
+        margin-bottom:6px">
+        <div class="wiz-radio" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--cyan);
+          flex-shrink:0;margin-top:2px;background:var(--cyan)"></div>
+        <div style="font-size:.78rem;color:var(--muted)">Ninguno — es un producto diferente</div>
+      </label>
+
+      ${wizardCatalogMatches.map(m => {
+        const label = `${m.brand||''} ${m.product_type||''}`.trim();
+        const meta  = [m.category, m.size, m.observations].filter(Boolean).join(' · ');
+        const mJson = JSON.stringify(m).replace(/"/g,'&quot;').replace(/'/g,"\'");
+        return `<label class="wiz-cat-opt" data-cat="${m.id}"
+          onclick="wizardSelectCatalog(this,JSON.parse(this.dataset.mdata))"
+          data-mdata="${mJson}"
+          style="display:flex;align-items:flex-start;gap:10px;padding:9px 11px;border-radius:10px;
+          background:var(--s2);border:2px solid var(--b2);cursor:pointer;touch-action:manipulation;margin-bottom:6px">
+          <div class="wiz-radio" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--b2);
+            flex-shrink:0;margin-top:2px"></div>
+          <div>
+            <div style="font-size:.82rem;font-weight:600;color:var(--text)">${label}</div>
+            ${meta ? `<div style="font-size:.68rem;color:var(--muted);margin-top:2px">${meta}</div>` : ''}
+          </div>
+        </label>`;
+      }).join('')}
+    </div>`;
+
+  // Pre-select "None"
+  item._catalog = null;
+  renderWizardStep2();
+}
+
+function wizardSelectCatalog(el, catalogProd) {
+  document.querySelectorAll('.wiz-cat-opt').forEach(opt => {
+    opt.style.borderColor = 'var(--b2)';
+    const r = opt.querySelector('.wiz-radio');
+    r.style.background   = '';
+    r.style.borderColor  = 'var(--b2)';
+  });
+  el.style.borderColor = 'var(--cyan)';
+  const r = el.querySelector('.wiz-radio');
+  r.style.background  = 'var(--cyan)';
+  r.style.borderColor = 'var(--cyan)';
+  wizardItems[wizardIdx]._catalog = catalogProd;
+  // If user picked a catalog item, prefill name with catalog name
+  if (catalogProd) {
+    const name = `${catalogProd.brand||''} ${catalogProd.product_type||''}`.trim();
+    const nameEl = document.getElementById('wiz-name');
+    if (nameEl && name) nameEl.value = name;
+    wizardItems[wizardIdx].name = name || wizardItems[wizardIdx].name;
+  }
+  renderWizardStep2();
+}
+
+// ── Step 2: Gemini clarity ─────────────────────────
+async function renderWizardStep2() {
+  const el = document.getElementById('wiz-step2');
+  if (!el) return;
+  const item = wizardItems[wizardIdx];
+
+  // If a catalog product was picked in Step 1, skip clarity check —
+  // catalog products are already fully specified
+  if (item._catalog) {
+    el.innerHTML = `<div style="font-size:.75rem;color:var(--green);padding:4px 0 10px">
+      ✅ Producto identificado del catálogo — listo para confirmar.</div>`;
+    return;
+  }
+
+  if (!geminiApiKey) { el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div style="color:var(--muted);font-size:.78rem;padding:8px 0">
+      <div class="spin" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></div>
+      Analizando si los detalles son suficientes…
+    </div>`;
 
   try {
-    const item = scannedReceiptItems[nextIdx];
-    const prompt = `You are validating a scanned supermarket receipt item in Spanish. Confirm if the following product description is complete enough to save as a draft for price comparison. If the name is missing size, packaging, or variant detail, answer with JSON {"valid":false,"message":"short instruction in Spanish"}. If it is good, answer with {"valid":true,"message":""}. Keep response as JSON only.`;
-    const raw = await callGemini([{ text: prompt + `\n\nProducto: ${item.name}\nCantidad: ${item.quantity}\nPrecio unitario: ${item.unit_price}` }], { disableThinking: true });
-    let cleaned = raw.replace(/```json|```/g, '').trim();
-    const start = cleaned.indexOf('{');
-    const end   = cleaned.lastIndexOf('}');
-    if (start !== -1 && end !== -1 && end > start) cleaned = cleaned.slice(start, end + 1);
-    const result = JSON.parse(cleaned);
-    if (result.valid) {
-      item.status = 'validated';
-      item.validationMessage = '';
-      toast(`✅ Producto validado: ${item.name}`);
+    const name  = (document.getElementById('wiz-name')?.value  || item.name  || '').trim();
+    const notes = (document.getElementById('wiz-notes')?.value || item.notes || '').trim();
+
+    const prompt = `Sos un revisor de un producto comprado en un supermercado argentino.
+Nombre: "${name}"${notes ? `
+Notas: "${notes}"` : ''}
+
+¿El nombre y las notas juntos permiten identificar este producto de forma ÚNICA (marca, envase, tamaño/peso)?
+Si falta información clave que exista en múltiples variantes, podés buscar en Google las presentaciones reales en Argentina.
+
+Responde SOLO con JSON: {"ok":true} si está bien identificado, o {"ok":false,"question":"pregunta concisa en español"} si falta info.`;
+
+    const raw = await callGemini([{ text: prompt }], { tools: [{ google_search: {} }] });
+    const clean = raw.replace(/```json|```/g,'').trim();
+    const res = JSON.parse(clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1));
+
+    if (wizardIdx !== wizardItems.indexOf(item) && wizardItems[wizardIdx] !== item) return;
+
+    if (res.ok) {
+      item._question = null;
+      el.innerHTML = `<div style="font-size:.75rem;color:var(--green);padding:4px 0 10px">
+        ✅ Detalles suficientes — listo para confirmar.</div>`;
     } else {
-      item.status = 'pending';
-      item.validationMessage = result.message || 'Falta detalle adicional';
-      toast(`⚠️ Producto pendiente: ${item.name}`);
+      item._question = res.question || '';
+      el.innerHTML = `
+        <div style="margin-top:4px">
+          <div style="font-size:.72rem;color:#fbbf24;font-weight:600;margin-bottom:6px;
+            text-transform:uppercase;letter-spacing:.06em">⚠️ Paso 2 — Detalle faltante</div>
+          <div style="font-size:.8rem;color:#fbbf24;margin-bottom:10px;line-height:1.5">
+            💡 ${res.question}</div>
+          <div style="font-size:.68rem;color:var(--muted);margin-bottom:4px">Tu respuesta (actualiza el nombre o las notas arriba)</div>
+          <input id="wiz-clarity-answer" placeholder="ej: botella 1.5L"
+            value="${(item._answer||'').replace(/"/g,'&quot;')}"
+            oninput="wizardItems[wizardIdx]._answer=this.value;
+              document.getElementById('wiz-notes').value=this.value;
+              wizardItems[wizardIdx].notes=this.value"
+            style="width:100%;background:var(--s3);border:1.5px solid rgba(251,191,36,.5);
+            border-radius:8px;padding:8px 10px;color:var(--text);font-size:.83rem;
+            font-family:var(--font)"/>
+        </div>`;
     }
   } catch(e) {
-    const item = scannedReceiptItems[nextIdx];
-    item.status = 'pending';
-    item.validationMessage = 'No se pudo validar con AI, editá el producto';
-    console.warn('Validation error', e);
+    console.warn('Wizard Step 2 skipped:', e);
+    el.innerHTML = '';
+  }
+}
+
+// ── Confirm current item and advance ──────────────
+function wizardConfirmItem() {
+  const item = wizardItems[wizardIdx];
+  // Sync editable fields
+  item.name       = document.getElementById('wiz-name')?.value.trim()  || item.name;
+  item.notes      = document.getElementById('wiz-notes')?.value.trim() || item.notes;
+  item.quantity   = Math.max(0, parseFloat(document.getElementById('wiz-qty')?.value)   || 0);
+  item.unit_price = Math.max(0, parseFloat(document.getElementById('wiz-price')?.value) || 0);
+  item.line_total = parseFloat((item.quantity * item.unit_price).toFixed(2));
+  item._status    = 'done';
+  renderWizardPills();
+  wizardAdvance();
+}
+
+function wizardSkipItem() {
+  // Mark as skipped but allow re-opening via pill tap
+  wizardItems[wizardIdx]._status = 'skipped';
+  renderWizardPills();
+  wizardAdvance();
+}
+
+function wizardAdvance() {
+  // Find next pending item
+  const next = wizardItems.findIndex((it, i) => i > wizardIdx && it._status === 'pending');
+  if (next !== -1) { wizardGoTo(next); return; }
+  // Check if there are any remaining pending items before the current (wrap-around)
+  const wrapNext = wizardItems.findIndex(it => it._status === 'pending');
+  if (wrapNext !== -1) { wizardGoTo(wrapNext); return; }
+  // All items processed — show draft
+  openDraftPreview();
+}
+
+function renderWizardPills() {
+  const el = document.getElementById('wizard-pills');
+  if (!el) return;
+  const done    = wizardItems.filter(it => it._status === 'done').length;
+  const total   = wizardItems.length;
+  const pending = wizardItems.filter(it => it._status === 'pending').length;
+
+  // Update subtitle
+  const ssub = document.getElementById('wizard-ssub');
+  if (ssub) {
+    ssub.textContent = `${done} de ${total} validados${pending ? ` · ${pending} pendiente${pending!==1?'s':''}` : ' ✅ Todos listos'}`;
   }
 
-  renderReceiptResults(scannedReceiptItems);
+  el.innerHTML = wizardItems.map((it, i) => {
+    const icon = it._status === 'done'    ? '✅' :
+                 it._status === 'skipped' ? '⏭' : '⚠️';
+    const isActive = i === wizardIdx;
+    return `<span onclick="wizardGoTo(${i})"
+      style="display:inline-flex;align-items:center;gap:4px;padding:5px 11px;margin-right:6px;
+      border-radius:50px;font-size:.72rem;cursor:pointer;touch-action:manipulation;white-space:nowrap;
+      background:${isActive?'var(--cyan)':'var(--s2)'};
+      color:${isActive?'#0a0a0f':'var(--muted)'};
+      border:1.5px solid ${isActive?'var(--cyan)':it._status==='done'?'rgba(74,222,128,.4)':it._status==='skipped'?'rgba(100,116,139,.4)':'rgba(251,191,36,.35)'};
+      font-weight:${isActive?'700':'400'}">
+      ${icon} ${(it.name||'Producto').slice(0,16)}${(it.name||'').length>16?'…':''}
+    </span>`;
+  }).join('');
+
+  setTimeout(() => {
+    const active = el.children[wizardIdx];
+    if (active) active.scrollIntoView({ behavior:'smooth', inline:'center', block:'nearest' });
+  }, 50);
 }
 
-function scanMoreReceipt() {
-  closeReceiptScanner();
-  setTimeout(() => document.getElementById('receipt-input').click(), 50);
+// ══════════════════════════════════════════
+//  DRAFT PREVIEW — after all wizard items processed
+// ══════════════════════════════════════════
+function openDraftPreview() {
+  closeOv('ov-wizard');
+  renderDraftList();
+  openOv('ov-draft');
 }
 
-function closeReceiptScannerAndEdit() {
-  closeReceiptScanner();
-  setTimeout(() => openProds(activeStore), 50);
-}
+function renderDraftList() {
+  const doneItems   = wizardItems.filter(it => it._status === 'done');
+  const skippedItems = wizardItems.filter(it => it._status === 'skipped');
+  const total = doneItems.reduce((s, it) => s + (it.line_total||0), 0);
+  const fmt   = n => '$' + Number(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
 
-function finalizeReceiptDraft() {
-  if (!scannedReceiptItems.every(i => i.status === 'validated')) {
-    toast('Todos los productos deben estar validados antes de guardar el draft');
+  const skippedBtn = document.getElementById('draft-review-skipped-btn');
+  if (skippedBtn) skippedBtn.style.display = skippedItems.length ? 'flex' : 'none';
+    `${doneItems.length} producto${doneItems.length!==1?'s':''} · Total ${fmt(total)}` +
+    (skippedItems.length ? ` · ${skippedItems.length} salteado${skippedItems.length!==1?'s':''}` : '');
+
+  const list = document.getElementById('draft-list');
+  if (!doneItems.length) {
+    list.innerHTML = `<div style="padding:32px;text-align:center;color:var(--muted);font-size:.85rem">
+      No hay productos confirmados.</div>`;
     return;
   }
-  closeOv('ov-receipt');
-  scannedReceiptItems.forEach((item, idx) => {
-    currentItems.push({
-      product_id:   `receipt_${Date.now()}_${idx}`,
-      product_name: item.name,
-      category:     '',
-      size:         '',
-      unit_price:   item.unit_price,
-      quantity:     item.quantity || 1,
-      line_total:   item.line_total || item.unit_price,
-      notes:        'Escaneado del ticket',
-      status:       'validated',
-      validationMessage: '',
-    });
-  });
-  renderChips();
-  toast(`✅ Draft saved with ${scannedReceiptItems.length} productos`);
-  scannedReceiptItems = [];
+
+  list.innerHTML = `
+    <!-- Total bar -->
+    <div style="display:flex;justify-content:space-between;align-items:center;
+      padding:10px 0;border-bottom:2px solid var(--b2);margin-bottom:8px">
+      <div style="font-size:.72rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em">
+        Total del ticket
+      </div>
+      <div style="font-size:1.1rem;font-weight:800;color:var(--green)">${fmt(total)}</div>
+    </div>
+
+    <!-- Product rows -->
+    ${doneItems.map((it, i) => {
+      const realIdx = wizardItems.indexOf(it);
+      const icon = it._catalog ? '✅' : (it._question && !it._answer ? '⚠️' : '✅');
+      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;
+        border-bottom:1px solid var(--b2)">
+        <div style="font-size:1rem;flex-shrink:0;margin-top:1px">${icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.85rem;font-weight:600;color:var(--text)">${it.name||'—'}</div>
+          ${it._catalog ? `<div style="font-size:.66rem;color:var(--cyan);margin-top:1px">
+            🔗 ${it._catalog.brand||''} ${it._catalog.product_type||''} — del catálogo</div>` : ''}
+          ${it.notes ? `<div style="font-size:.68rem;color:var(--muted);margin-top:1px">${it.notes}</div>` : ''}
+          <div style="font-size:.72rem;color:var(--muted);margin-top:3px">
+            ${it.quantity} × ${fmt(it.unit_price)}
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:.9rem;font-weight:700;color:var(--text)">${fmt(it.line_total)}</div>
+          <button onclick="draftRemoveItem(${realIdx})"
+            style="margin-top:4px;background:none;border:none;color:var(--red);font-size:.72rem;
+            cursor:pointer;touch-action:manipulation;padding:2px 0">✕ quitar</button>
+        </div>
+      </div>`;
+    }).join('')}
+
+    ${skippedItems.length ? `<div style="padding:10px 0;font-size:.72rem;color:var(--muted)">
+      ${skippedItems.length} producto${skippedItems.length!==1?'s':''} salteado${skippedItems.length!==1?'s':''} — usá "Agregar manual" o "Nuevo scan" para agregarlos.</div>` : ''}
+  `;
 }
 
-function closeReceiptScanner() {
-  receiptScanGen++; // invalidate any in-flight request so it can't apply stale results
-  scannedReceiptItems = [];
-  closeOv('ov-receipt');
+function draftRemoveItem(realIdx) {
+  wizardItems[realIdx]._status = 'skipped';
+  renderDraftList();
 }
 
-async function handleReceiptPhoto(input) {
-  if (!scannedReceiptItems.length) { closeReceiptScanner(); return; }
-  let added = 0, skipped = 0;
-  scannedReceiptItems.forEach((item, idx) => {
-    if (!item.name || !item.unit_price || !item.quantity) { skipped++; return; }
+function draftAddManual() {
+  closeOv('ov-draft');
+  toast('📝 Agregá el producto en el formulario y volvé a confirmar');
+}
+
+function draftAddScan() {
+  closeOv('ov-draft');
+  openReceiptScanner();
+}
+
+function draftReviewSkipped() {
+  // Re-open wizard focused on first skipped item
+  const firstSkipped = wizardItems.findIndex(it => it._status === 'skipped');
+  if (firstSkipped === -1) return;
+  wizardItems.forEach(it => { if (it._status === 'skipped') it._status = 'pending'; });
+  closeOv('ov-draft');
+  openOv('ov-wizard');
+  renderWizardPills();
+  setTimeout(() => wizardGoTo(firstSkipped), 80);
+}
+
+function draftSaveToSession() {
+  const doneItems = wizardItems.filter(it => it._status === 'done' && it.name && it.unit_price > 0);
+  if (!doneItems.length) { toast('⚠️ No hay productos para guardar'); return; }
+
+  doneItems.forEach((it, idx) => {
     currentItems.push({
-      product_id:   `receipt_${Date.now()}_${idx}`,
-      product_name: item.name,
-      category:     '',
-      size:         '',
-      unit_price:   item.unit_price,
-      quantity:     item.quantity || 1,
-      line_total:   item.line_total || item.unit_price,
-      notes:        'Escaneado del ticket',
+      product_id:          it._catalog?.id || it.id,
+      product_name:        it.name,
+      category:            it._catalog?.category || '',
+      size:                it._catalog?.size     || '',
+      catalog_product_id:  it._catalog?.id       || null,
+      unit_price:          it.unit_price,
+      quantity:            it.quantity,
+      line_total:          it.line_total,
+      notes:               it.notes || 'Escaneado del ticket',
     });
-    added++;
   });
+
   renderChips();
-  closeOv('ov-receipt');
-  // Items are staged for review — NOT saved/confirmed yet.
-  // The user must still tap "✓ Confirmar" to actually save the purchase.
-  if (added === 0) {
-    toast('⚠️ No se cargó ningún producto — faltaban nombre o precio');
-  } else if (skipped > 0) {
-    toast(`📋 ${added} cargado${added!==1?'s':''} (${skipped} omitido${skipped!==1?'s':''} por datos incompletos) — tocá ✓ Confirmar para guardar`);
-  } else {
-    toast(`📋 ${added} producto${added!==1?'s':''} cargado${added!==1?'s':''} para revisar — tocá ✓ Confirmar para guardar`);
-  }
-  scannedReceiptItems = [];
+  closeOv('ov-draft');
+  wizardItems = [];
+
+  const total = doneItems.reduce((s,it) => s+(it.line_total||0), 0);
+  const fmt = n => '$'+Number(n).toLocaleString('es-AR',{minimumFractionDigits:2});
+  toast(`✅ ${doneItems.length} producto${doneItems.length!==1?'s':''} cargado${doneItems.length!==1?'s':''} — tocá ✓ Confirmar para guardar`);
 }
 
 // ══════════════════════════════════════════
@@ -3209,26 +3408,9 @@ async function runClarityCheck() {
   btn.innerHTML = originalHTML;
 
   if (ambiguous.length > 0) {
-    currentItems.forEach((item, idx) => {
-      const found = ambiguous.find(a => a.index === idx);
-      if (found) {
-        item.status = 'pending';
-        item.validationMessage = found.question;
-      } else {
-        item.status = 'validated';
-        item.validationMessage = '';
-      }
-    });
-    renderChips();
     showClarityReview(ambiguous);
     return;
   }
-
-  currentItems.forEach(item => {
-    item.status = 'validated';
-    item.validationMessage = '';
-  });
-  renderChips();
   proceedConfirmPurchase();
 }
 
